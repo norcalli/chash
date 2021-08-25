@@ -155,14 +155,17 @@ fn main() -> Result<()> {
                                 // || child.get_name().is_none()
                             })
                             .map(|child| {
-                                // println!("{:?}", child);
                                 let name = child.get_name();
-                                // println!("{:?}", name);
                                 let type_ = child.get_type().unwrap();
                                 Field {
                                     offset: name
                                         .as_ref()
-                                        .and_then(|name| struct_type.get_offsetof(&name).ok()),
+                                        .and_then(|name| struct_type.get_offsetof(&name).ok())
+                                        .or_else(|| {
+                                            child
+                                                .get_enum_constant_value()
+                                                .map(|(_s, u)| u as usize)
+                                        }),
                                     type_id: type_.into(),
                                     underlying: underlying_type(type_).into(),
                                     name,
