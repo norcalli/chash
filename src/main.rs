@@ -216,6 +216,7 @@ fn main() -> Result<()> {
             }
         }
     }
+    ensure!(!type_dependencies.is_empty(), "Failed to find any names");
     for dep in type_dependencies {
         println!("{}", struct_lookup[&dep]);
     }
