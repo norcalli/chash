@@ -104,18 +104,11 @@ enum RecordKind {
 #[derive(Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone)]
 struct RecordInfo {
     kind: RecordKind,
-    name: String,
     aliases: BTreeSet<String>,
     size: usize,
     type_id: TypeId,
     fields: Vec<Field>,
     // dependencies: BTreeSet<TypeId>,
-}
-
-impl RecordInfo {
-    fn is_anonymous(&self) -> bool {
-        self.name == self.type_id.0
-    }
 }
 
 impl std::fmt::Display for RecordInfo {
@@ -210,60 +203,55 @@ fn main() -> Result<()> {
                     let size = struct_type.get_sizeof().ok()?;
                     // println!("{:?}", name);
                     let type_id: TypeId = struct_type.into();
-                    let new = struct_lookup
-                        .entry(type_id.clone())
-                        .and_modify(|record| {
-                            record.aliases.insert(name.clone());
-                        })
-                        .or_insert_with(|| {
-                            let new = RecordInfo {
-                                kind: match node.get_kind() {
-                                    EntityKind::StructDecl => RecordKind::Struct,
-                                    EntityKind::UnionDecl => RecordKind::Union,
-                                    EntityKind::EnumDecl => RecordKind::Enum,
-                                    _ => unreachable!(),
-                                },
-                                name,
-                                size,
-                                type_id,
-                                aliases: Default::default(),
-                                fields: node
-                                    .get_children()
-                                    .into_iter()
-                                    // TODO:
-                                    //  bit fields child.is_bit_field()
-                                    //    - ashkan, Wed 25 Aug 2021 10:57:05 PM JST
-                                    // TODO:
-                                    //  Edge case with `v2` which doesn't have aliases
-                                    //    - ashkan, Wed 25 Aug 2021 11:22:56 PM JST
-                                    .filter(|child| {
-                                        child.get_kind() == EntityKind::FieldDecl
-                                            || child.get_kind() == EntityKind::EnumConstantDecl
-                                            || child.get_kind() == EntityKind::UnionDecl
-                                            || child.get_kind() == EntityKind::StructDecl
-                                            // || child.get_name().is_none()
-                                    })
-                                    .map(|child| {
-                                        // println!("{:?}", child);
-                                        let name = child.get_name();
-                                        // println!("{:?}", name);
-                                        let type_ = child.get_type().unwrap();
-                                        Field {
-                                            offset: name.as_ref().and_then(|name| {
-                                                struct_type.get_offsetof(&name).ok()
-                                            }),
-                                            type_id: type_.into(),
-                                            underlying: underlying_type(type_).into(),
-                                            name,
-                                        }
-                                    })
-                                    .collect(),
-                            };
-                            if name_filters.contains(&new.name) {
-                                targets.insert(new.type_id.clone());
-                            }
-                            new
-                        });
+                    let new = struct_lookup.entry(type_id.clone()).or_insert_with(|| {
+                        let new = RecordInfo {
+                            kind: match node.get_kind() {
+                                EntityKind::StructDecl => RecordKind::Struct,
+                                EntityKind::UnionDecl => RecordKind::Union,
+                                EntityKind::EnumDecl => RecordKind::Enum,
+                                _ => unreachable!(),
+                            },
+                            size,
+                            type_id,
+                            aliases: Default::default(),
+                            fields: node
+                                .get_children()
+                                .into_iter()
+                                // TODO:
+                                //  bit fields child.is_bit_field()
+                                //    - ashkan, Wed 25 Aug 2021 10:57:05 PM JST
+                                // TODO:
+                                //  Edge case with `v2` which doesn't have aliases
+                                //    - ashkan, Wed 25 Aug 2021 11:22:56 PM JST
+                                .filter(|child| {
+                                    child.get_kind() == EntityKind::FieldDecl
+                                        || child.get_kind() == EntityKind::EnumConstantDecl
+                                        || child.get_kind() == EntityKind::UnionDecl
+                                        || child.get_kind() == EntityKind::StructDecl
+                                    // || child.get_name().is_none()
+                                })
+                                .map(|child| {
+                                    // println!("{:?}", child);
+                                    let name = child.get_name();
+                                    // println!("{:?}", name);
+                                    let type_ = child.get_type().unwrap();
+                                    Field {
+                                        offset: name
+                                            .as_ref()
+                                            .and_then(|name| struct_type.get_offsetof(&name).ok()),
+                                        type_id: type_.into(),
+                                        underlying: underlying_type(type_).into(),
+                                        name,
+                                    }
+                                })
+                                .collect(),
+                        };
+                        new
+                    });
+                    if name_filters.contains(&name) {
+                        targets.insert(new.type_id.clone());
+                    }
+                    new.aliases.insert(name);
                     // eprintln!("{:?}", new);
                     // let prev = struct_lookup.insert(new.type_id.clone(), new.clone())?;
                     // if prev != new {
