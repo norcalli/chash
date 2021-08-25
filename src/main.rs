@@ -1,6 +1,7 @@
 use anyhow::*;
 use clang::*;
 use itertools::Itertools;
+use log::*;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -82,7 +83,7 @@ impl std::fmt::Display for Field {
         write!(
             f,
             "{}: {}",
-            self.name.as_ref().map(|s| s.as_str()).unwrap_or(""),
+            self.name.as_ref().map(|s| s.as_str()).unwrap_or("_"),
             self.type_id
         )?;
         if let Some(offset) = self.offset {
@@ -92,37 +93,97 @@ impl std::fmt::Display for Field {
     }
 }
 
+#[derive(parse_display::Display, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[display(style = "snake_case")]
+enum RecordKind {
+    Struct,
+    Union,
+    Enum,
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone)]
-struct StructInfo {
+struct RecordInfo {
+    kind: RecordKind,
     name: String,
+    aliases: BTreeSet<String>,
     size: usize,
     type_id: TypeId,
     fields: Vec<Field>,
     // dependencies: BTreeSet<TypeId>,
 }
 
-impl std::fmt::Display for StructInfo {
+impl RecordInfo {
+    fn is_anonymous(&self) -> bool {
+        self.name == self.type_id.0
+    }
+}
+
+impl std::fmt::Display for RecordInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}[{}] : {} {{ {} }}",
-            self.name,
-            self.size,
+            "{}[{}] {} {{ {} }}",
             self.type_id,
+            self.size,
+            self.kind,
             self.fields.iter().format(", ")
         )?;
+        // write!(
+        //     f,
+        //     "{} {}[{}] : {} {{ {} }}",
+        //     self.kind,
+        //     // self.name,
+        //     if self.is_anonymous() { "_" } else { &self.name },
+        //     self.size,
+        //     self.type_id,
+        //     self.fields.iter().format(", ")
+        // )?;
         Ok(())
     }
 }
 
+fn find_record_def<'a>(node: Entity<'a>) -> Option<(Entity<'a>, String)> {
+    if node.is_definition() {
+        if node.get_kind() == EntityKind::StructDecl
+            || node.get_kind() == EntityKind::UnionDecl
+            || node.get_kind() == EntityKind::EnumDecl
+        {
+            let name = node.get_name().unwrap_or_else(|| {
+                let type_id: TypeId = node.get_type().unwrap().into();
+                type_id.0
+            });
+            return Some((node, name));
+        }
+    }
+    if node.get_kind() == EntityKind::TypedefDecl {
+        for child in node.get_children() {
+            if child.get_kind() == EntityKind::UnionDecl
+                || child.get_kind() == EntityKind::StructDecl
+                || child.get_kind() == EntityKind::EnumDecl
+            {
+                return Some((child, node.get_name()?));
+            }
+        }
+    }
+
+    // if let Some(type_) = node.get_typedef_underlying_type() {
+    //     type_.get_class_type();
+    //     if type_.get_kind() == TypeKind::Record {
+    //         return Some((node.get_name()?, type_));
+    //     }
+    // }
+    None
+}
+
 fn main() -> Result<()> {
+    env_logger::init();
     let mut it = std::env::args();
     it.next().ok_or_else(|| anyhow!("Need arg"))?;
     let file: PathBuf = it.next().ok_or_else(|| anyhow!("Need arg"))?.parse()?;
-    eprintln!("{}", file.display());
+    info!("{}", file.display());
     let name_filters: HashSet<_> = it.collect();
     ensure!(!name_filters.is_empty(), "Need a name filter");
-    eprintln!("{:?}", name_filters);
+    info!("{:?}", name_filters);
     let clang = Clang::new().map_err(|v| anyhow!("{}", v))?;
     let index = Index::new(&clang, false, false);
     let tu = index.parser(file).parse()?;
@@ -131,60 +192,101 @@ fn main() -> Result<()> {
     let entity = tu.get_entity();
     // println!("{}", hash(&"test"));
     // let mut type_map = HashMap::new();
-    let mut struct_lookup = HashMap::<TypeId, StructInfo>::new();
+    let mut struct_lookup = HashMap::<TypeId, RecordInfo>::new();
     let mut targets = HashSet::new();
     entity.visit_children(|node, _parent| {
-        if node.is_definition() {
-            if node.get_kind() == EntityKind::StructDecl {
+        // if node.is_definition()
+        if let Some((node, name)) = find_record_def(node.get_canonical_entity()) {
+            // if node.get_kind() == EntityKind::StructDecl || node.get_kind() == EntityKind::UnionDecl
+            {
+                debug!("FOUND: {:?}", name);
                 // if let Some(type_) = node.get_type() {
                 //     type_map.insert(get_type_id(&type_), node);
                 // }
                 let struct_ = node;
                 (|| -> Option<_> {
-                    let name = struct_.get_name()?;
+                    // let name = struct_.get_name()?;
                     let struct_type = struct_.get_type()?;
                     let size = struct_type.get_sizeof().ok()?;
                     // println!("{:?}", name);
-                    let new = StructInfo {
-                        name,
-                        size,
-                        type_id: struct_type.into(),
-                        fields: node
-                            .get_children()
-                            .into_iter()
-                            .map(|child| {
-                                // println!("{:?}", child);
-                                let name = child.get_name();
-                                // println!("{:?}", name);
-                                let type_ = child.get_type().unwrap();
-                                Field {
-                                    offset: name
-                                        .as_ref()
-                                        .and_then(|name| struct_type.get_offsetof(&name).ok()),
-                                    type_id: type_.into(),
-                                    underlying: underlying_type(type_).into(),
-                                    name,
-                                }
-                            })
-                            .collect(),
-                    };
+                    let type_id: TypeId = struct_type.into();
+                    let new = struct_lookup
+                        .entry(type_id.clone())
+                        .and_modify(|record| {
+                            record.aliases.insert(name.clone());
+                        })
+                        .or_insert_with(|| {
+                            let new = RecordInfo {
+                                kind: match node.get_kind() {
+                                    EntityKind::StructDecl => RecordKind::Struct,
+                                    EntityKind::UnionDecl => RecordKind::Union,
+                                    EntityKind::EnumDecl => RecordKind::Enum,
+                                    _ => unreachable!(),
+                                },
+                                name,
+                                size,
+                                type_id,
+                                aliases: Default::default(),
+                                fields: node
+                                    .get_children()
+                                    .into_iter()
+                                    // TODO:
+                                    //  bit fields child.is_bit_field()
+                                    //    - ashkan, Wed 25 Aug 2021 10:57:05 PM JST
+                                    // TODO:
+                                    //  Edge case with `v2` which doesn't have aliases
+                                    //    - ashkan, Wed 25 Aug 2021 11:22:56 PM JST
+                                    .filter(|child| {
+                                        child.get_kind() == EntityKind::FieldDecl
+                                            || child.get_kind() == EntityKind::EnumConstantDecl
+                                            || child.get_kind() == EntityKind::UnionDecl
+                                            || child.get_kind() == EntityKind::StructDecl
+                                            // || child.get_name().is_none()
+                                    })
+                                    .map(|child| {
+                                        // println!("{:?}", child);
+                                        let name = child.get_name();
+                                        // println!("{:?}", name);
+                                        let type_ = child.get_type().unwrap();
+                                        Field {
+                                            offset: name.as_ref().and_then(|name| {
+                                                struct_type.get_offsetof(&name).ok()
+                                            }),
+                                            type_id: type_.into(),
+                                            underlying: underlying_type(type_).into(),
+                                            name,
+                                        }
+                                    })
+                                    .collect(),
+                            };
+                            if name_filters.contains(&new.name) {
+                                targets.insert(new.type_id.clone());
+                            }
+                            new
+                        });
                     // eprintln!("{:?}", new);
-                    let prev = struct_lookup.insert(new.type_id.clone(), new.clone())?;
-                    if prev != new {
-                        panic!("Found a previous value: {:?}", prev);
-                    }
+                    // let prev = struct_lookup.insert(new.type_id.clone(), new.clone())?;
+                    // if prev != new {
+                    //     error!("Difference found:\n* {:?}\n* {:?}\n", prev, new);
+                    // }
+                    // TODO:
+                    //
+                    //    - ashkan, Wed 25 Aug 2021 10:53:31 PM JST
+                    // assert_eq!(prev, new);
                     None::<()>
                 })();
             }
         }
-        if let Some(name) = node.get_name() {
-            if name_filters.contains(&name) {
-                if node.get_kind() == EntityKind::StructDecl {
-                    let struct_ = node;
-                    targets.insert(struct_);
-                }
-            }
-        }
+
+        // if let Some(name) = node.get_name() {
+        //     if name_filters.contains(&name) {
+        //         if node.get_kind() == EntityKind::StructDecl {
+        //             let struct_ = node;
+        //             targets.insert(struct_);
+        //         }
+        //     }
+        // }
+
         // if node.get_kind() == EntityKind::TypedefDecl {
         //     let type_ = node.get_type().unwrap();
         //     type_map.insert(get_type_id(&type_), node);
@@ -229,15 +331,17 @@ fn main() -> Result<()> {
     // let mut resolved = HashMap::new();
     // eprintln!("{:#?}", type_map);
 
+    info!("{}", struct_lookup.values().format(",\n"));
     eprintln!("{}", struct_lookup.values().format(",\n"));
 
+    let mut type_dependencies = BTreeSet::new();
     for target in targets {
         // let struct_type = target.get_type().unwrap();
         let mut visited = HashSet::new();
         let mut discovered = HashSet::new();
-        let mut stack: Vec<TypeId> = vec![target.get_type().unwrap().into()];
+        // let mut stack: Vec<TypeId> = vec![target.get_type().unwrap().into()];
+        let mut stack: Vec<TypeId> = vec![target];
         discovered.insert(stack[0].clone());
-        let mut type_dependencies = BTreeSet::new();
         while let Some(type_id) = stack.pop() {
             // Mark
             assert_eq!(visited.insert(type_id.clone()), true, "{:?}", &type_id);
@@ -320,10 +424,11 @@ fn main() -> Result<()> {
         //     if d
         //     visited.
         // }
-        eprintln!("{:?}", type_dependencies);
-        for dep in type_dependencies {
-            println!("{}", struct_lookup[&dep]);
-        }
+    }
+    eprintln!("{:?}", type_dependencies);
+    eprintln!();
+    for dep in type_dependencies {
+        println!("{}", struct_lookup[&dep]);
     }
     Ok(())
 }
