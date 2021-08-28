@@ -1,13 +1,18 @@
 use anyhow::*;
 use clang::*;
+use indexmap::IndexMap;
 use itertools::Itertools;
 use log::*;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+
+// NOTE:
+//  Can use BTreeMap to order lexicorigraphically instread
+//    - ashkan, Sun 29 Aug 2021 03:39:04 AM JST
+use IndexMap as StructMap;
 
 #[derive(parse_display::Display, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone)]
 struct TypeId(String);
@@ -134,7 +139,7 @@ fn main() -> Result<()> {
     let index = Index::new(&clang, false, false);
     let tu = index.parser(file).parse()?;
     let entity = tu.get_entity();
-    let mut struct_lookup = HashMap::<TypeId, RecordInfo>::new();
+    let mut struct_lookup = StructMap::<TypeId, RecordInfo>::new();
     let mut targets = BTreeSet::new();
     entity.visit_children(|node, _parent| {
         // NOTE this doesn't work with forward declared structs. e.g. monospace_instance
