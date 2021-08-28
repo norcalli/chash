@@ -94,11 +94,13 @@ fn find_record_def<'a>(node: Entity<'a>) -> Option<(Entity<'a>, String)> {
     }
     if node.get_kind() == EntityKind::TypedefDecl {
         for child in node.get_children() {
-            if child.get_kind() == EntityKind::UnionDecl
-                || child.get_kind() == EntityKind::StructDecl
-                || child.get_kind() == EntityKind::EnumDecl
-            {
-                return Some((child, node.get_name()?));
+            if child.is_definition() {
+                if child.get_kind() == EntityKind::UnionDecl
+                    || child.get_kind() == EntityKind::StructDecl
+                    || child.get_kind() == EntityKind::EnumDecl
+                {
+                    return Some((child, node.get_name()?));
+                }
             }
         }
     }
@@ -106,6 +108,9 @@ fn find_record_def<'a>(node: Entity<'a>) -> Option<(Entity<'a>, String)> {
 }
 
 fn main() -> Result<()> {
+    if std::env::var_os("RUST_LOG").is_none() {
+        std::env::set_var("RUST_LOG", "info");
+    }
     env_logger::init();
     let mut it = std::env::args();
     it.next().ok_or_else(|| anyhow!("Need arg"))?;
@@ -121,7 +126,9 @@ fn main() -> Result<()> {
     let mut struct_lookup = HashMap::<TypeId, RecordInfo>::new();
     let mut targets = HashSet::new();
     entity.visit_children(|node, _parent| {
-        if let Some((node, name)) = find_record_def(node.get_canonical_entity()) {
+        // NOTE this doesn't work with forward declared structs. e.g. monospace_instance
+        // if let Some((node, name)) = find_record_def(node.get_canonical_entity()) {
+        if let Some((node, name)) = find_record_def(node) {
             debug!("FOUND: {:?}", name);
             (|| -> Option<_> {
                 let struct_type = node.get_type()?;
