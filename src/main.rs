@@ -31,16 +31,27 @@ struct Field {
     type_id: TypeId,
     offset: Option<usize>,
     underlying: TypeId,
+    bit_field_width: Option<usize>,
 }
 
 impl std::fmt::Display for Field {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}: {}",
-            self.name.as_ref().map(|s| s.as_str()).unwrap_or("_"),
-            self.type_id
-        )?;
+        if let Some(bit_field_width) = self.bit_field_width {
+            write!(
+                f,
+                "{}: {}({})",
+                self.name.as_ref().map(|s| s.as_str()).unwrap_or("_"),
+                self.type_id,
+                bit_field_width,
+            )?;
+        } else {
+            write!(
+                f,
+                "{}: {}",
+                self.name.as_ref().map(|s| s.as_str()).unwrap_or("_"),
+                self.type_id
+            )?;
+        }
         if let Some(offset) = self.offset {
             write!(f, " @ {}", offset)?;
         }
@@ -124,7 +135,7 @@ fn main() -> Result<()> {
     let tu = index.parser(file).parse()?;
     let entity = tu.get_entity();
     let mut struct_lookup = HashMap::<TypeId, RecordInfo>::new();
-    let mut targets = HashSet::new();
+    let mut targets = BTreeSet::new();
     entity.visit_children(|node, _parent| {
         // NOTE this doesn't work with forward declared structs. e.g. monospace_instance
         // if let Some((node, name)) = find_record_def(node.get_canonical_entity()) {
@@ -176,6 +187,7 @@ fn main() -> Result<()> {
                                     type_id: type_.into(),
                                     underlying: underlying_type(type_).into(),
                                     name,
+                                    bit_field_width: child.get_bit_field_width(),
                                 }
                             })
                             .collect(),
