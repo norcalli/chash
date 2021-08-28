@@ -199,32 +199,37 @@ fn main() -> Result<()> {
     eprintln!("{}", struct_lookup.values().format(",\n"));
     eprintln!();
 
-    let mut type_dependencies = BTreeSet::new();
+    let mut toposorted = Vec::new();
     for target in targets {
         let mut visited = HashSet::new();
+        let mut processed = HashSet::new();
         let mut discovered = HashSet::new();
         let mut stack: Vec<TypeId> = vec![target];
         discovered.insert(stack[0].clone());
         while let Some(type_id) = stack.pop() {
             // Mark
-            assert_eq!(visited.insert(type_id.clone()), true, "{:?}", &type_id);
+            if visited.insert(type_id.clone()) {
+                // Visit
+                let node = &struct_lookup[&type_id];
+                // type_dependencies.insert(node.type_id.clone());
 
-            // Visit
-            let node = &struct_lookup[&type_id];
-            type_dependencies.insert(node.type_id.clone());
+                stack.push(type_id.clone());
 
-            // Discover
-            for field in node.fields.iter() {
-                if struct_lookup.contains_key(&field.underlying) {
-                    if discovered.insert(field.underlying.clone()) {
-                        stack.push(field.underlying.clone());
+                // Discover
+                for field in node.fields.iter() {
+                    if struct_lookup.contains_key(&field.underlying) {
+                        if discovered.insert(field.underlying.clone()) {
+                            stack.push(field.underlying.clone());
+                        }
                     }
                 }
+            } else if processed.insert(type_id.clone()) {
+                toposorted.push(type_id);
             }
         }
     }
-    ensure!(!type_dependencies.is_empty(), "Failed to find any names");
-    for dep in type_dependencies {
+    ensure!(!toposorted.is_empty(), "Failed to find any names");
+    for dep in toposorted {
         println!("{}", struct_lookup[&dep]);
     }
     Ok(())
