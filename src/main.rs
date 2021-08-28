@@ -109,7 +109,7 @@ fn find_record_def<'a>(node: Entity<'a>) -> Option<(Entity<'a>, String)> {
 
 fn main() -> Result<()> {
     if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "info");
+        std::env::set_var("RUST_LOG", "warn");
     }
     env_logger::init();
     let mut it = std::env::args();
