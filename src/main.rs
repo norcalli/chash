@@ -89,7 +89,7 @@ impl std::fmt::Display for RecordInfo {
             self.type_id,
             self.size,
             self.kind,
-            self.fields.iter().format(", ")
+            self.fields.iter().format(" | ")
         )?;
         Ok(())
     }
@@ -225,9 +225,11 @@ fn main() -> Result<()> {
         stack.push(target.clone());
         discovered.insert(target);
     }
+    let array_cleaner = regex::Regex::new(r#"\s*\[\d+\]$"#).unwrap();
     while let Some(type_id) = stack.pop() {
         // Mark
         if visited.insert(type_id.clone()) {
+            eprintln!("Visit: {}", type_id);
             // Visit
             let node = &struct_lookup[&type_id];
             // type_dependencies.insert(node.type_id.clone());
@@ -236,9 +238,17 @@ fn main() -> Result<()> {
 
             // Discover
             for field in node.fields.iter() {
-                if struct_lookup.contains_key(&field.underlying) {
-                    if discovered.insert(field.underlying.clone()) {
-                        stack.push(field.underlying.clone());
+                eprintln!("\tField: {}", field.underlying);
+                let no_array = TypeId(array_cleaner.replace(&field.underlying.0, "").to_string());
+                for type_id in &[&field.underlying, &no_array] {
+                    let type_id: &TypeId = type_id;
+                    eprintln!("\t\tChecking: {}", type_id);
+                    if struct_lookup.contains_key(type_id) {
+                        eprintln!("\t\tFound in lookup: {}", type_id);
+                        if discovered.insert(type_id.clone()) {
+                            eprintln!("\t\tUndiscovered: {}", type_id);
+                            stack.push(type_id.clone());
+                        }
                     }
                 }
             }
